@@ -63,7 +63,7 @@ import type {
 	ExtensionContext,
 	ExtensionCommandContext,
 } from "@mariozechner/pi-coding-agent";
-import { isKeyRelease, isKeyRepeat, matchesKey } from "@mariozechner/pi-tui";
+import { isKeyRelease, isKeyRepeat, matchesKey, parseKey } from "@mariozechner/pi-tui";
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
@@ -1338,8 +1338,16 @@ export default function (pi: ExtensionAPI) {
 			// If user was just typing (non-space key within TYPING_COOLDOWN_MS),
 			// don't let space holds activate voice — they're just typing.
 			if (!matchesKey(data, "space") && !isKeyRelease(data) && !isKeyRepeat(data)) {
-				// Regular keypress that isn't space — user is typing
-				if (data.length > 0 && data.charCodeAt(0) >= 32) {
+				// Kitty protocol terminals send printable keys as CSI-u sequences,
+				// so raw printable-byte checks miss normal typing. Use parseKey()
+				// first so letters, punctuation, arrows, backspace, etc. all count
+				// as recent typing unless they are another form of space key.
+				const parsedKey = parseKey(data);
+				const parsedKeyBase = parsedKey?.split("+").at(-1);
+				const isNonSpaceKey = parsedKeyBase
+					? parsedKeyBase !== "space"
+					: data.length > 0 && data.charCodeAt(0) >= 32;
+				if (isNonSpaceKey) {
 					lastNonSpaceKeyTime = Date.now();
 				}
 			}
@@ -1389,8 +1397,8 @@ export default function (pi: ExtensionAPI) {
 						hideWidget();
 						setVoiceState("idle");
 						if (holdDuration < 300) {
-							// Quick tap — just type a space
-							if (ctx?.hasUI) ctx.ui.setEditorText((ctx.ui.getEditorText() || "") + " ");
+							// Quick tap — insert a literal space at the caret.
+							if (ctx?.hasUI) ctx.ui.pasteToEditor(" ");
 						} else {
 							// Held long enough to see warmup but let go → show hint
 							ctx?.ui.notify("Hold SPACE longer to activate voice.", "info");
@@ -1402,7 +1410,7 @@ export default function (pi: ExtensionAPI) {
 					// Kitty path since we enter warmup on first press, but handle anyway)
 					if (spaceDownTime && !holdConfirmed && voiceState === "idle") {
 						resetHoldState();
-						if (ctx?.hasUI) ctx.ui.setEditorText((ctx.ui.getEditorText() || "") + " ");
+						if (ctx?.hasUI) ctx.ui.pasteToEditor(" ");
 						return { consume: true };
 					}
 
